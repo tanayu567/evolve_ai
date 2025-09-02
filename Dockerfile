@@ -18,7 +18,7 @@ RUN useradd -m appuser && chown -R appuser /app
 USER appuser
 
 # Default entrypoint; pass CLI args to override options
-ENTRYPOINT ["python", "-u", "/app/sve_scrape.py"]
+ENTRYPOINT ["python", "-u", "/app/src/sve_scrape.py"]
 # No default args; caller can pass e.g. --limit 10 or --out /data/cards.tsv
 CMD []
 
