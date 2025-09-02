@@ -11,7 +11,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy scraper
-COPY sve_scrape.py ./
+COPY src/sve_scrape.py ./
 
 # Drop privileges
 RUN useradd -m appuser && chown -R appuser /app
