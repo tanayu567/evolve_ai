@@ -69,7 +69,8 @@ def extract_expansions(soup: BeautifulSoup) -> List[str]:
     return codes
 
 
-CARDNO_RE = re.compile(r"cardno=([A-Z0-9\-]+)")
+# Include lowercase and underscore as some cardnos use suffixes like 'a'/'b'
+CARDNO_RE = re.compile(r"cardno=([A-Za-z0-9_\-]+)")
 
 
 def extract_cardnos_from_html(html: str) -> Set[str]:
@@ -192,6 +193,139 @@ def crawl_cardnos_from_search_url(s: requests.Session, url: str, delay: float = 
             time.sleep(delay)
     return cardnos
 
+
+def _all_links_and_datacardnos(soup: BeautifulSoup) -> Dict[str, List[str]]:
+    """Collect all hrefs and any data-cardno attributes on the page for diagnostics.
+
+    Returns a dict with keys:
+    - hrefs: list of href strings
+    - data_cardnos: list of values from any [data-cardno] attributes
+    """
+    hrefs: List[str] = []
+    for a in soup.find_all('a', href=True):
+        hrefs.append(a['href'])
+    data_cardnos: List[str] = []
+    for el in soup.select('[data-cardno]'):
+        val = (el.get('data-cardno') or '').strip()
+        if val:
+            data_cardnos.append(val)
+    return {"hrefs": hrefs, "data_cardnos": data_cardnos}
+
+
+def inspect_search_url(s: requests.Session, url: str, delay: float = 0.8, sample: int = 5) -> Dict[str, object]:
+    """Inspect a search URL and report examples of:
+    - Duplicate cardno occurrences across listing entries
+    - Listing links that do not contain a `cardno=` parameter
+
+    Returns a dict with summary and example lists for presentation.
+    """
+    results: Dict[str, object] = {
+        "url": url,
+        "duplicates": [],  # list of tuples (cardno, count, sample_hrefs[:3])
+        "no_cardno_links": [],  # list of href samples without cardno=
+        "pages": 0,
+    }
+
+    # Fetch first page
+    soup = get_soup(s, url)
+    html = str(soup)
+    parsed = urlparse(url)
+
+    # Helper to process a single page
+    def process_page(soup: BeautifulSoup, base_url: str):
+        html = str(soup)
+        hrefs_data = _all_links_and_datacardnos(soup)
+        hrefs = [urljoin(base_url, h) for h in hrefs_data["hrefs"]]
+        found_cardnos = list(CARDNO_RE.findall(html))
+
+        # Count occurrences per cardno and retain sample hrefs for that cardno
+        hrefs_by_cardno: Dict[str, List[str]] = {}
+        for h in hrefs:
+            m = CARDNO_RE.search(h)
+            if m:
+                hrefs_by_cardno.setdefault(m.group(1), []).append(h)
+
+        from collections import Counter
+        cnt = Counter(found_cardnos)
+        dups = [(cn, n, hrefs_by_cardno.get(cn, [])[:3]) for cn, n in cnt.items() if n > 1]
+
+        # Links under cardlist domain without cardno param
+        no_param = [h for h in hrefs if "/cardlist/" in h and "cardno=" not in h]
+
+        return dups, no_param
+
+    # Determine pagination style
+    duplicates_accum: List[tuple] = []
+    no_param_accum: List[str] = []
+
+    if "/cardlist/cardsearch/" in parsed.path:
+        m = re.search(r"max_page\s*=\s*(\d+)", html)
+        max_page = int(m.group(1)) if m else 1
+        # First page
+        d, np = process_page(soup, url)
+        duplicates_accum.extend(d)
+        no_param_accum.extend(np)
+        # Subsequent pages via cardsearch_ex
+        qs = parse_qs(parsed.query, keep_blank_values=True)
+        normalized_qs = {}
+        for k, v in qs.items():
+            nk = k.replace("class[0]", "class[]").replace("cost[0]", "cost[]").replace("card_kind[0]", "card_kind[]")
+            normalized_qs.setdefault(nk, v)
+        base_ex = urljoin(url, "/cardlist/cardsearch_ex")
+        for page in range(2, max_page + 1):
+            normalized_qs["page"] = [str(page)]
+            ex_url = f"{base_ex}?{urlencode(normalized_qs, doseq=True)}"
+            try:
+                ex_soup = get_soup(s, ex_url)
+                d, np = process_page(ex_soup, ex_url)
+                duplicates_accum.extend(d)
+                no_param_accum.extend(np)
+                time.sleep(delay)
+            except Exception:
+                pass
+        results["pages"] = max_page
+    else:
+        # Classic pagination
+        current_url = url
+        d, np = process_page(soup, current_url)
+        duplicates_accum.extend(d)
+        no_param_accum.extend(np)
+        next_url = find_next_url(soup, current_url)
+        pages = 1
+        while next_url and next_url != current_url:
+            soup = get_soup(s, next_url)
+            d, np = process_page(soup, next_url)
+            duplicates_accum.extend(d)
+            no_param_accum.extend(np)
+            pages += 1
+            current_url = next_url
+            next_url = find_next_url(soup, current_url)
+            if next_url and next_url != current_url:
+                time.sleep(delay)
+        results["pages"] = pages
+
+    # Prepare samples
+    # Deduplicate duplicate entries by cardno (keep highest count and some href samples)
+    best_by_cardno: Dict[str, tuple] = {}
+    for cn, n, hrefs in duplicates_accum:
+        cur = best_by_cardno.get(cn)
+        if not cur or n > cur[1]:
+            best_by_cardno[cn] = (cn, n, hrefs)
+    dup_samples = sorted(best_by_cardno.values(), key=lambda x: -x[1])[:sample]
+
+    # Unique no-cardno links, sample
+    seen = set()
+    uniq_no_param = []
+    for h in no_param_accum:
+        if h not in seen:
+            seen.add(h)
+            uniq_no_param.append(h)
+        if len(uniq_no_param) >= sample:
+            break
+
+    results["duplicates"] = dup_samples
+    results["no_cardno_links"] = uniq_no_param
+    return results
 
 LABEL_MAP = {
     # Japanese -> canonical column keys
@@ -463,9 +597,45 @@ def main():
         default=None,
         help="Full search URL from the site (cardlist or cardsearch). Can be repeated.",
     )
+    p.add_argument(
+        "--inspect-search",
+        action="append",
+        default=None,
+        help="Inspect a search URL for duplicate cardnos and links without cardno= (diagnostic).",
+    )
+    p.add_argument(
+        "--inspect-limit",
+        type=int,
+        default=5,
+        help="Max number of duplicate/no-cardno samples to print during inspection.",
+    )
     args = p.parse_args()
 
     s = session_with_retries()
+
+    # Diagnostic mode: inspect and exit
+    if args.inspect_search:
+        for u in args.inspect_search:
+            info = inspect_search_url(s, u, delay=args.delay, sample=args.inspect_limit)
+            print(f"[inspect] URL: {info['url']}")
+            print(f"[inspect] Pages scanned: {info['pages']}")
+            dups = info.get('duplicates', []) or []
+            if dups:
+                print("[inspect] Duplicate cardno samples (cardno x count):")
+                for cn, n, hrefs in dups:
+                    print(f"  - {cn} x {n}")
+                    for h in hrefs:
+                        print(f"      href: {h}")
+            else:
+                print("[inspect] No duplicate cardno occurrences found in samples.")
+            no_params = info.get('no_cardno_links', []) or []
+            if no_params:
+                print("[inspect] Links without cardno= samples:")
+                for h in no_params:
+                    print(f"  - {h}")
+            else:
+                print("[inspect] No links without cardno= found in samples.")
+        return
 
     # Collect cardnos based on inputs
     cardnos: Set[str] = set()
