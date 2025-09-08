@@ -22,13 +22,13 @@ docker run --rm sve-scraper --limit 10
 - ホスト側にファイルを出したい場合はボリュームをマウントして `--out` で保存先を指定:
 
 ```
-docker run --rm -v "$PWD:/data" sve-scraper --limit 50 --out /data/cards.tsv
+docker run --rm -v "$PWD/data:/data" sve-scraper --limit 50 --out /data/cards.tsv
 ```
 
 - 収録弾を絞って取得（例: BP16 と CP01）:
 
 ```
-docker run --rm -v "$PWD:/data" sve-scraper \
+docker run --rm -v "$PWD/data:/data" sve-scraper \
   --only-expansion BP16 --only-expansion CP01 \
   --delay 1.0 --out /data/cards.tsv
 ```
@@ -36,7 +36,7 @@ docker run --rm -v "$PWD:/data" sve-scraper \
 - 任意の検索URL（カードリスト/カード検索）から取得（ページネーション対応）:
 
 ```
-docker run --rm -v "$PWD:/data" sve-scraper \
+docker run --rm -v "$PWD/data:/data" sve-scraper \
   --search-url 'https://shadowverse-evolve.com/cardlist/?card_name=&class%5B0%5D=all&title=&expansion_name=BP01&cost%5B0%5D=all&card_kind%5B0%5D=all&rare%5B0%5D=all&power_from=&power_to=&hp_from=&hp_to=&type=&ability=&keyword=&view=image' \
   --out /data/cards.tsv
 ```
@@ -44,7 +44,7 @@ docker run --rm -v "$PWD:/data" sve-scraper \
 - cardsearch（無限スクロール）URLの例（ご提示のBP01, 273件相当）:
 
 ```
-docker run --rm -v "$PWD:/data" sve-scraper \
+docker run --rm -v "$PWD/data:/data" sve-scraper \
   --search-url 'https://shadowverse-evolve.com/cardlist/cardsearch/?card_name=&class%5B%5D=all&title=&expansion_name=BP01&cost%5B%5D=all&card_kind%5B%5D=all&rare%5B%5D=all&power_from=&power_to=&hp_from=&hp_to=&type=&ability=&keyword=&view=image' \
   --out /data/cards.tsv
 ```

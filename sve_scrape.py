@@ -610,6 +610,7 @@ def main():
         help="Max number of duplicate/no-cardno samples to print during inspection.",
     )
     args = p.parse_args()
+    start_ts = time.time()
 
     s = session_with_retries()
 
@@ -635,6 +636,9 @@ def main():
                     print(f"  - {h}")
             else:
                 print("[inspect] No links without cardno= found in samples.")
+        # Print elapsed time also in inspect mode
+        elapsed = time.time() - start_ts
+        print(f"Elapsed time: {elapsed:.2f}s")
         return
 
     # Collect cardnos based on inputs
@@ -664,8 +668,22 @@ def main():
         except Exception as e:
             print(f"[warn] detail {cn}: {e}", file=sys.stderr)
 
-    write_tsv(rows, args.out)
-    print(f"Wrote {len(rows)} records to {args.out}")
+    # De-duplicate by (name, kind), keeping the first occurrence.
+    # Since rows are built in cardno ASCII ascending order, the kept one
+    # is the lexicographically smallest by current ordering.
+    uniq_rows: List[Dict[str, str]] = []
+    seen_name_kind: Set[tuple] = set()
+    for r in rows:
+        key = (r.get("name", ""), r.get("kind", ""))
+        if key in seen_name_kind:
+            continue
+        seen_name_kind.add(key)
+        uniq_rows.append(r)
+
+    write_tsv(uniq_rows, args.out)
+    print(f"Wrote {len(uniq_rows)} records to {args.out}")
+    elapsed = time.time() - start_ts
+    print(f"Elapsed time: {elapsed:.2f}s")
 
 
 if __name__ == "__main__":
